@@ -21,7 +21,7 @@ void RCInput_Navio2::init()
     for (size_t i = 0; i < ARRAY_SIZE(channels); i++) {
         channels[i] = open_channel(i);
         if (channels[i] < 0) {
-            perror("open");
+            perror("RCInput_Navio2: sprintf() in init()\n");
         }
     }
 }
@@ -36,16 +36,12 @@ void RCInput_Navio2::_timer_tick(void)
     uint16_t periods[ARRAY_SIZE(channels)] = {0};
 
     for (size_t i = 0; i < ARRAY_SIZE(channels); i++) {
-        if (::pread(channels[i], buffer, ARRAY_SIZE(buffer), 0) < 0) {
-            perror("pread");
-            continue;
+        if (::pread(channels[i], buffer, ARRAY_SIZE(buffer), 0) > 0) {
+            periods[i] = atoi(buffer);
         }
-
-        periods[i] = atoi(buffer);
     }
 
     _update_periods(periods, ARRAY_SIZE(periods));
-
     _last_timestamp = AP_HAL::micros();
 }
 
@@ -60,16 +56,12 @@ RCInput_Navio2::~RCInput_Navio2()
 
 int RCInput_Navio2::open_channel(int channel)
 {
-    char *channel_path;
-    if (asprintf(&channel_path, "%s/ch%d", RCIN_SYSFS_PATH, channel) == -1) {
-        AP_HAL::panic("[RCInput_Navio2]: not enough memory\n");
+    memset(_channel_path_buf, 0, sizeof(_channel_path_buf));
+    if (sprintf(_channel_path_buf, "%s/ch%d", RCIN_SYSFS_PATH, channel) == -1) {
+        AP_HAL::panic("[RCInput_Navio2]: sprintf() in open_channel() failed\n");
     }
 
-    int fd = ::open(channel_path, O_RDONLY);
-
-    free(channel_path);
-
-    return fd;
+    return ::open(_channel_path_buf, O_RDONLY);
 }
 
 

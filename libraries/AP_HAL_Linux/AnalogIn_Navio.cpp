@@ -20,26 +20,23 @@ union pwm_params {
 
 void NavioAnalogSource::set_channel(int16_t pin)
 {
-    char *channel_path;
-
-    if (pin != -1 && asprintf(&channel_path, "%s/ch%d", RCIN_BASE_PATH, pin) == -1) {
-        AP_HAL::panic("asprintf\n");
+    memset(_channel_path_buf, 0, sizeof(_channel_path_buf));
+    if (pin != -1 && sprintf(_channel_path_buf, "%s/ch%d", RCIN_BASE_PATH, pin) == -1) {
+        AP_HAL::panic("NavioAnalogSource: sprintf() in set_channel()\n");
     }
 
     if (_fd >= 0) {
         ::close(_fd);
     }
 
-    _fd = ::open(channel_path, O_RDONLY);
+    _fd = ::open(_channel_path_buf, O_RDONLY);
 
     if (_fd < 0) {
-        hal.console->printf("%s not opened: %s", channel_path, strerror(errno));
+        hal.console->printf("%s not opened: %s", _channel_path_buf, strerror(errno));
     }
-
-    free(channel_path);
 }
 
-NavioAnalogSource::NavioAnalogSource(int16_t pin):
+NavioAnalogSource::NavioAnalogSource(uint8_t pin):
     _pin(pin)
 {
     set_channel(pin);
@@ -68,17 +65,12 @@ float NavioAnalogSource::read_latest()
 
 float NavioAnalogSource::voltage_average()
 {
-    char buffer[RCIN_PATH_MAX];
+    char buffer[RCIN_PATH_MAX] = {0};
 
-    int ret;
-
-    ret = ::pread(_fd, buffer, sizeof(buffer), 0);
-
-    if (ret < 0) {
-        perror("pread");
+    int ret = ::pread(_fd, buffer, sizeof(buffer), 0);
+    if (ret > 0) {
+        _value = ((float) atoi(buffer)) / 1000;
     }
-
-    _value = ((float) atoi(buffer)) / 1000;
 
     return _value;
 }
@@ -105,6 +97,7 @@ float NavioAnalogIn::board_voltage(void)
     auto voltage = _board_voltage_pin->voltage_average();
     return voltage;
 }
+
 float NavioAnalogIn::servorail_voltage(void)
 {
     auto voltage = _servorail_pin->voltage_average();
@@ -120,7 +113,7 @@ AP_HAL::AnalogSource* NavioAnalogIn::channel(int16_t pin)
         }
     }
 
-    hal.console->println("Out of analog channels");
+    //hal.console->println("Out of analog channels");
     return NULL;
 }
 

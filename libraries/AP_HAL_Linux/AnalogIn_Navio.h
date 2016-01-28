@@ -10,7 +10,7 @@
 class NavioAnalogSource: public AP_HAL::AnalogSource {
 public:
     friend class NavioAnalogIn;
-    NavioAnalogSource(int16_t pin);
+    NavioAnalogSource(uint8_t pin);
     float read_average();
     float read_latest();
     void set_pin(uint8_t p);
@@ -21,9 +21,10 @@ public:
     float voltage_average_ratiometric();
 private:
     void set_channel(int16_t pin);
-    int16_t _pin;
+    uint8_t _pin;
     int _fd = -1;
     float _value = 0.0f;
+    char _channel_path_buf[256] = {0};
 };
 
 class NavioAnalogIn: public AP_HAL::AnalogIn {
