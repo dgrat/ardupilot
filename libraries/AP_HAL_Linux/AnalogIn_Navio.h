@@ -10,10 +10,12 @@
 class NavioAnalogSource: public AP_HAL::AnalogSource {
 public:
     friend class NavioAnalogIn;
-    NavioAnalogSource(uint8_t pin);
+    NavioAnalogSource();
+    NavioAnalogSource(int16_t pin);
     float read_average();
     float read_latest();
     void set_pin(uint8_t p);
+    int16_t get_pin() const;
     void set_stop_pin(uint8_t p) {}
     void set_settle_time(uint16_t settle_time_ms){}
     float voltage_average();
@@ -21,7 +23,7 @@ public:
     float voltage_average_ratiometric();
 private:
     void set_channel(int16_t pin);
-    uint8_t _pin;
+    int16_t _pin;
     int _fd = -1;
     float _value = 0.0f;
     char _channel_path_buf[256] = {0};
@@ -36,7 +38,7 @@ public:
     float servorail_voltage(void) override;
 
 private:
-    NavioAnalogSource *_channels[NAVIO_ADC_MAX_CHANNELS];
+    NavioAnalogSource _channels[NAVIO_ADC_MAX_CHANNELS];
 
     uint8_t _channels_number;
 

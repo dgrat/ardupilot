@@ -11,17 +11,18 @@
 
 extern const AP_HAL::HAL& hal;
 
-union pwm_params {
-    char channel[sizeof("XXXX")];
-};
-
 #define RCIN_BASE_PATH "/sys/kernel/rcio/adc"
-#define RCIN_PATH_MAX (sizeof(RCIN_BASE_PATH) + sizeof(pwm_params) - 1)
+#define RCIN_PATH_MAX (sizeof(RCIN_BASE_PATH) + sizeof("XXXX") - 1)
+
 
 void NavioAnalogSource::set_channel(int16_t pin)
 {
+    if(pin < 0) {
+        return;
+    }
+  
     memset(_channel_path_buf, 0, sizeof(_channel_path_buf));
-    if (pin != -1 && sprintf(_channel_path_buf, "%s/ch%d", RCIN_BASE_PATH, pin) == -1) {
+    if (sprintf(_channel_path_buf, "%s/ch%d", RCIN_BASE_PATH, pin) == -1) {
         AP_HAL::panic("NavioAnalogSource: sprintf() in set_channel()\n");
     }
 
@@ -36,10 +37,20 @@ void NavioAnalogSource::set_channel(int16_t pin)
     }
 }
 
-NavioAnalogSource::NavioAnalogSource(uint8_t pin):
+NavioAnalogSource::NavioAnalogSource() : _pin(-1)
+{
+    set_channel(-1);
+}
+
+NavioAnalogSource::NavioAnalogSource(int16_t pin):
     _pin(pin)
 {
     set_channel(pin);
+}
+
+int16_t NavioAnalogSource::get_pin() const 
+{
+    return _pin;
 }
 
 void NavioAnalogSource::set_pin(uint8_t pin)
@@ -107,13 +118,12 @@ float NavioAnalogIn::servorail_voltage(void)
 AP_HAL::AnalogSource* NavioAnalogIn::channel(int16_t pin)
 {
     for (uint8_t j = 0; j < _channels_number; j++) {
-        if (_channels[j] == NULL) {
-            _channels[j] = new NavioAnalogSource(pin);
-            return _channels[j];
+        if (_channels[j].get_pin() == -1) {
+            _channels[j].set_pin(pin);
+            return &_channels[j];
         }
     }
 
-    //hal.console->println("Out of analog channels");
     return NULL;
 }
 
