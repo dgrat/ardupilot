@@ -16,36 +16,38 @@ extern const AP_HAL::HAL& hal;
 
 #define RCIN_SYSFS_PATH "/sys/kernel/rcio/rcin"
 
+template<int iNumChans>
 void RCInput_Navio2::init()
 {
-    for (size_t i = 0; i < ARRAY_SIZE(channels); i++) {
-        channels[i] = open_channel(i);
-        if (channels[i] < 0) {
+    for (size_t i = 0; i < iNumChans; i++) {
+        _channels[i] = open_channel(i);
+        if (_channels[i] < 0) {
             AP_HAL::panic("[RCInput_Navio2]: failed to open channels\n");
         }
     }
+    
+    _last_timestamp = AP_HAL::micros();
 }
 
+template<int iNumChans>
 void RCInput_Navio2::_timer_tick(void)
 {
     if (AP_HAL::micros() - _last_timestamp < 10000) {
         return;
     }
 
-    char buffer[12];
+    const int iBufSize = 12;
+    char buffer[iBufSize] = { '\0' };
 
-    for (size_t i = 0; i < ARRAY_SIZE(channels); i++) {
-        if (::pread(channels[i], buffer, sizeof(buffer) - 1, 0) <= 0) {
-            /* We ignore error in order not to spam the console */
+    for (size_t i = 0; i < iNumChans; i++) {
+        if (!::pread(_channels[i], buffer, iBufSize-1, 0)) {
             continue;
         }
 
-        buffer[sizeof(buffer) - 1]  = '\0';
-        periods[i] = atoi(buffer);
+        _periods[i] = atoi(buffer);
     }
 
-    _update_periods(periods, ARRAY_SIZE(periods));
-
+    _update_periods(_periods, iNumChans);
     _last_timestamp = AP_HAL::micros();
 }
 
@@ -64,12 +66,9 @@ int RCInput_Navio2::open_channel(int channel)
     if (asprintf(&channel_path, "%s/ch%d", RCIN_SYSFS_PATH, channel) == -1) {
         AP_HAL::panic("[RCInput_Navio2]: not enough memory\n");
     }
-
-    int fd = ::open(channel_path, O_RDONLY);
-
     free(channel_path);
 
-    return fd;
+    return ::open(channel_path, O_RDONLY);
 }
 
 
