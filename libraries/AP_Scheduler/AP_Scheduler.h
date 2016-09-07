@@ -13,28 +13,19 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-
-/*
- *  main loop scheduler for APM
- *  Author: Andrew Tridgell, January 2013
- *
- */
 #pragma once
 
-#include <AP_Param/AP_Param.h>
+#include <stdint.h>
+#include <stdio.h>
+
 #include <AP_HAL/Util.h>
+#include <AP_HAL/AP_HAL.h>
+#include <AP_Param/AP_Param.h>
+#include <AP_Vehicle/AP_Vehicle.h>
 
-#define AP_SCHEDULER_NAME_INITIALIZER(_name) .name = #_name,
-
-/*
-  useful macro for creating scheduler task table
- */
-#define SCHED_TASK_CLASS(classname, classptr, func, _rate_hz, _max_time_micros) { \
-    .function = FUNCTOR_BIND(classptr, &classname::func, void),\
-    AP_SCHEDULER_NAME_INITIALIZER(func)\
-    .rate_hz = _rate_hz,\
-    .max_time_micros = _max_time_micros\
-}
+// return the input parameter as a string
+#define xstr(s) str(s)
+#define str(s) #s
 
 /*
   A task scheduler for APM main loops
@@ -45,27 +36,34 @@
   To run tasks use scheduler.run(), passing the amount of time that
   the scheduler is allowed to use before it must return
  */
-
-#include <AP_HAL/AP_HAL.h>
-#include <AP_Vehicle/AP_Vehicle.h>
-
-class AP_Scheduler
-{
-public:
-    // constructor
-    AP_Scheduler(void);
+template <class Vehicle>
+struct AP_Task {
+// typedefs
+    typedef void (Vehicle::*task_fn_t)();
+// variables
+    task_fn_t   _function;
     
-    FUNCTOR_TYPEDEF(task_fn_t, void);
+    const char* _name;
+    float       _rate_hz;
+    uint16_t    _max_time_micros;
+// statics
+    static AP_Task<Vehicle> create(task_fn_t function, float rate_hz, uint16_t max_time_micros) {
+        return {function, xstr(function), rate_hz, max_time_micros};
+    }
+};
 
-    struct Task {
-        task_fn_t function;
-        const char *name;
-        float rate_hz;
-        uint16_t max_time_micros;
-    };
-
+template <class Vehicle>
+class AP_Scheduler {
+// typedefs
+    typedef void (Vehicle::*task_fn_t)();
+  
+public:
+    // constructor, which takes the pointer of the parent object. The second parameter defines the standard loop rate
+    AP_Scheduler(Vehicle *parent, const uint16_t loop_rate = 50);
+    ~AP_Scheduler();
+    
     // initialise scheduler
-    void init(const Task *tasks, uint8_t num_tasks);
+    void init(const AP_Task<Vehicle> *tasks, uint8_t num_tasks);
 
     // call when one tick has passed
     void tick(void);
@@ -97,6 +95,9 @@ public:
     static int8_t current_task;
 
 private:
+    // Object pointer to parent class
+    Vehicle* _parent = NULL;
+  
     // used to enable scheduler debugging
     AP_Int8 _debug;
 
@@ -104,7 +105,7 @@ private:
     AP_Int16 _loop_rate_hz;
     
     // progmem list of tasks to run
-    const struct Task *_tasks;
+    const struct AP_Task<Vehicle> *_tasks;
 
     // number of tasks in _tasks list
     uint8_t _num_tasks;
@@ -131,3 +132,5 @@ private:
     // performance counters
     AP_HAL::Util::perf_counter_t *_perf_counters;
 };
+
+#include "AP_Scheduler.tpp"
