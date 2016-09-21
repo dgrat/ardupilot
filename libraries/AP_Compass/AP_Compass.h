@@ -10,6 +10,8 @@
 #include <AP_Param/AP_Param.h>
 #include <GCS_MAVLink/GCS_MAVLink.h>
 
+#include <Filter/LowPassFilter.h>
+
 #include "CompassCalibrator.h"
 #include "AP_Compass_Backend.h"
 
@@ -308,6 +310,18 @@ public:
     }
     
 private:
+    // field scaling function for all compass instances
+    LowPassFilterFloat _scaling_lpf[COMPASS_MAX_INSTANCES];
+    LowPassFilterVector3f _baseline_lpf[COMPASS_MAX_INSTANCES];
+    
+    AP_Float _field_scale_lpf_rate;
+    AP_Float _field_baseline_lpf_rate;
+    
+    Vector3f _field_offsets[COMPASS_MAX_INSTANCES];
+    
+    void correct_baseline_offsets();
+    void scale_field();
+    
     /// Register a new compas driver, allocating an instance number
     ///
     /// @return number of compass instances

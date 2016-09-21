@@ -362,6 +362,20 @@ const AP_Param::GroupInfo Compass::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("CAL_FIT", 30, Compass, _calibration_threshold, 8.0f),
 
+    // @Param: SCLE_LPF
+    // @Range: 1 10
+    // @Values: 0:OFF
+    // @DisplayName: If bigger zero, this function enables the automatic field scaling if more than one compass is installed
+    // @Description: The feature uses a LPF to calculate the scaling factors by using the norm field vectors
+    AP_GROUPINFO("SCLE_LPF", 31, Compass, _field_scale_lpf_rate, 5),
+    
+    // @Param: BSLN_LPF
+    // @Range: 0.005 1.000
+    // @Values: 0:OFF
+    // @DisplayName: If bigger zero, this function enables the automatic field scaling if more than one compass is installed
+    // @Description: The feature uses a LPF to calculate the scaling factors by using the norm field vectors
+    AP_GROUPINFO("BSLN_LPF", 32, Compass, _field_baseline_lpf_rate, 0.1),
+    
     AP_GROUPEND
 };
 
@@ -407,6 +421,14 @@ Compass::init()
         hal.scheduler->delay(100);
         read();
     }
+    
+    // for the scaling factor we concentrate on the low frequency content
+    for(int i = 0; i < COMPASS_MAX_INSTANCES; i++) {
+        _scaling_lpf[i].set_cutoff_frequency(_field_scale_lpf_rate);
+        _baseline_lpf[i].set_cutoff_frequency(_field_baseline_lpf_rate);
+        _field_offsets[i] = {0,0,0};
+    }
+    
     return true;
 }
 
@@ -564,7 +586,79 @@ Compass::read(void)
     for (uint8_t i=0; i < COMPASS_MAX_INSTANCES; i++) {
         _state[i].healthy = (AP_HAL::millis() - _state[i].last_update_ms < 500);
     }
+    
+    if(is_calibrating() == false && configured()) { 
+        // here we align the align the baselines with each other
+        correct_baseline_offsets();
+        // here we scale the signals with each other
+        scale_field();
+    }
+    
     return healthy();
+}
+
+// calculate the baseline for all field vectors of each compass instance
+// Remove the offset to the primary compass
+// Note: This will not influence the net signal change for heading determination
+void Compass::correct_baseline_offsets() 
+{
+    // This function is useless if there not at least two sensors installed
+    if(!get_count() || is_zero(_field_scale_lpf_rate.get())) {
+        return;
+    }
+
+    // 1) Apply LPF for baseline determination
+    for(int i = 0; i < get_count(); i++) {
+        const float dt_s = static_cast<float>(AP_HAL::millis() - _state[i].last_update_ms) / 1000.f;
+        _baseline_lpf[i].apply(_state[i].field, dt_s);
+    }
+    
+    // 2) Calculate the offsets to the primary compass
+    for(int i = 0; i < get_count(); i++) {      
+        _field_offsets[i] = _baseline_lpf[_primary].get() - _baseline_lpf[i].get();
+    }
+    
+    // 3) Remove the offset to the primary compass by adding the determined offset
+    for(int i = 0; i < get_count(); i++) {
+        // if the compass is primary we skip the correction step (otherwise the algorithm will likely drift)
+        if(i == _primary) {
+            continue;
+        }
+        _state[i].field += _field_offsets[i];
+    }
+}
+
+// calculate the scaling among all existing compass'
+void Compass::scale_field() 
+{
+    // This function is useless if there not at least two sensors installed
+    if(!get_count() || get_count() < 2 || is_zero(_field_scale_lpf_rate.get())) {
+        return;
+    }
+
+    // Calculate the norm of the current field vector
+    for(int i = 0; i < get_count(); i++) {
+        const float field_norm = norm(_state[i].field[0], _state[i].field[1], _state[i].field[2]);
+        const float dt_s = static_cast<float>(AP_HAL::millis() - _state[i].last_update_ms) / 1000.f;
+        _scaling_lpf[i].apply(field_norm, dt_s);
+    }
+
+    // find the maximum norm of the field vector
+    float max_norm = _scaling_lpf[0].get();
+    for(int i = 1; i < get_count(); i++) {
+        max_norm = _scaling_lpf[i].get() > max_norm ? _scaling_lpf[i].get() : max_norm;
+    }
+
+    // calculate scaling factor for all fields based on the maximum norm
+    for(int i = 0; i < get_count(); i++) {
+        float scale = _scaling_lpf[i].get() / max_norm;
+        // reset the scale to 1 in case of error
+        if(scale < 0 || scale > 1) {
+            scale = 1;
+        }
+        // apply the scaling factor    
+        _state[i].field *= scale;
+    }
 }
 
 uint8_t
