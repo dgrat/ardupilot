@@ -30,7 +30,7 @@
   often they should be called (in Hz) and the maximum time
   they are expected to take (in microseconds)
  */
-const AP_Scheduler::Task Plane::scheduler_tasks[] = {
+AP_Scheduler::Task Plane::scheduler_tasks[] = {
                            // Units:   Hz      us
     SCHED_TASK(ahrs_update,           400,    400),
     SCHED_TASK(read_radio,             50,    100),
