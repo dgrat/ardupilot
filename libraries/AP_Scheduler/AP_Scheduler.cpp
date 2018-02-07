@@ -68,32 +68,33 @@ AP_Scheduler::AP_Scheduler(scheduler_fastloop_fn_t fastloop_fn) :
     // only allow 50 to 2000 Hz
     if (_loop_rate_hz < 50) {
         _loop_rate_hz.set(50);
-    } else if (_loop_rate_hz > 2000) {
+    } 
+    if (_loop_rate_hz > 2000) {
         _loop_rate_hz.set(2000);
     }
     _last_loop_time_s = 1.0 / _loop_rate_hz;
 }
 
 // initialise the scheduler
-void AP_Scheduler::init(const AP_Scheduler::Task *tasks, uint8_t num_tasks, uint32_t log_performance_bit)
+void AP_Scheduler::init(const AP_Scheduler::Task *tasks, uint8_t num_tasks)
 {
     _tasks = tasks;
     _num_tasks = num_tasks;
-    _last_run = new uint16_t[_num_tasks];
-    memset(_last_run, 0, sizeof(_last_run[0]) * _num_tasks);
-    _tick_counter = 0;
+    _loop_period_us = 1000000UL / _loop_rate_hz;
+    _last_run_us = AP_HAL::micros();    
 
     // setup initial performance counters
     perf_info.set_loop_rate(get_loop_rate_hz());
     perf_info.reset();
 
     _log_performance_bit = log_performance_bit;
-}
-
-// one tick has passed
-void AP_Scheduler::tick(void)
-{
-    _tick_counter++;
+    
+    if (_debug > 1 && _perf_counters == nullptr) {
+        _perf_counters = new AP_HAL::Util::perf_counter_t[_num_tasks];
+        for (uint8_t i=0; i < _num_tasks; i++) {
+            _perf_counters[i] = hal.util->perf_alloc(AP_HAL::Util::PC_ELAPSED, _tasks[i].name);
+        }
+    }
 }
 
 /*
@@ -101,82 +102,78 @@ void AP_Scheduler::tick(void)
   this will run as many scheduler tasks as we can in the specified time
  */
 void AP_Scheduler::run(uint32_t time_available)
-{
-    uint32_t run_started_usec = AP_HAL::micros();
-    uint32_t now = run_started_usec;
+{    
+    _tick_counter++;
 
-    if (_debug > 1 && _perf_counters == nullptr) {
-        _perf_counters = new AP_HAL::Util::perf_counter_t[_num_tasks];
-        if (_perf_counters != nullptr) {
-            for (uint8_t i=0; i<_num_tasks; i++) {
-                _perf_counters[i] = hal.util->perf_alloc(AP_HAL::Util::PC_ELAPSED, _tasks[i].name);
-            }
+    for (uint8_t i = 0; i < _num_tasks; i++) {
+        const uint16_t dticks = _tick_counter - _tasks[i].last_run; // (x * _loop_period_us) would be the time which passed
+        const uint16_t tmp = _loop_rate_hz / _tasks[i].rate_hz;   // how often the task can be called
+        const uint16_t interval_ticks = tmp < 1 ? 1 : tmp;
+        const uint16_t bias_slipped_ticks = interval_ticks;
+        
+        //printf("%d: passed ticks %d, req ticks %d\n", i, dticks, tmp);
+        
+        if(dticks < interval_ticks) continue;
+        // this task is due to run. Do we have enough time to run it?
+        _task_time_allowed = _tasks[i].max_time_micros;
+
+        // we've slipped a whole run of this task!
+        if (dticks >= bias_slipped_ticks) {
+            debug(2, "Scheduler slip task[%u-%s] (%u/%u/%u)\n",
+                    (unsigned)i,
+                    _tasks[i].name,
+                    (unsigned)dticks,
+                    (unsigned)interval_ticks,
+                    (unsigned)_task_time_allowed);
         }
-    }
-    
-    for (uint8_t i=0; i<_num_tasks; i++) {
-        uint16_t dt = _tick_counter - _last_run[i];
-        uint16_t interval_ticks = _loop_rate_hz / _tasks[i].rate_hz;
-        if (interval_ticks < 1) {
-            interval_ticks = 1;
-        }
-        if (dt >= interval_ticks) {
-            // this task is due to run. Do we have enough time to run it?
-            _task_time_allowed = _tasks[i].max_time_micros;
-
-            if (dt >= interval_ticks*2) {
-                // we've slipped a whole run of this task!
-                debug(2, "Scheduler slip task[%u-%s] (%u/%u/%u)\n",
-                      (unsigned)i,
-                      _tasks[i].name,
-                      (unsigned)dt,
-                      (unsigned)interval_ticks,
-                      (unsigned)_task_time_allowed);
+        
+        // run it
+        if (_task_time_allowed <= time_available) {
+            _task_time_started = AP_HAL::micros();
+            current_task = i;
+            const bool bPerfCntrs = _debug > 1 && _perf_counters && _perf_counters[i];
+            if (bPerfCntrs) {
+                hal.util->perf_begin(_perf_counters[i]);
             }
-
-            if (_task_time_allowed <= time_available) {
-                // run it
-                _task_time_started = now;
-                current_task = i;
-                if (_debug > 1 && _perf_counters && _perf_counters[i]) {
-                    hal.util->perf_begin(_perf_counters[i]);
-                }
-                _tasks[i].function();
-                if (_debug > 1 && _perf_counters && _perf_counters[i]) {
-                    hal.util->perf_end(_perf_counters[i]);
-                }
-                current_task = -1;
-
-                // record the tick counter when we ran. This drives
-                // when we next run the event
-                _last_run[i] = _tick_counter;
-
-                // work out how long the event actually took
-                now = AP_HAL::micros();
-                uint32_t time_taken = now - _task_time_started;
-
-                if (time_taken > _task_time_allowed) {
-                    // the event overran!
-                    debug(3, "Scheduler overrun task[%u-%s] (%u/%u)\n",
-                          (unsigned)i,
-                          _tasks[i].name,
-                          (unsigned)time_taken,
-                          (unsigned)_task_time_allowed);
-                }
-                if (time_taken >= time_available) {
-                    goto update_spare_ticks;
-                }
-                time_available -= time_taken;
+            _tasks[i].function();
+            if (bPerfCntrs) {
+                hal.util->perf_end(_perf_counters[i]);
             }
+            current_task = -1;
+
+            // record the tick counter when we ran. This drives
+            // when we next run the event
+            _tasks[i].last_run = _tick_counter;
+
+            // work out how long the event actually took
+            const uint32_t time_taken = AP_HAL::micros() - _task_time_started;
+
+            // the event overran!
+            if (time_taken > _task_time_allowed) {
+                debug(3, "Scheduler overrun task[%u-%s] (%u/%u)\n",
+                        (unsigned)i,
+                        _tasks[i].name,
+                        (unsigned)time_taken,
+                        (unsigned)_task_time_allowed);
+            }
+            
+            if (time_taken >= time_available) {
+                update_spare_ticks();
+                return;
+            }
+            time_available -= time_taken;
         }
     }
 
     // update number of spare microseconds
     _spare_micros += time_available;
+    update_spare_ticks();
+}
 
-update_spare_ticks:
+void AP_Scheduler::update_spare_ticks() {
+    // update number of spare microseconds
     _spare_ticks++;
-    if (_spare_ticks == 32) {
+    if(_spare_ticks == 32) {
         _spare_ticks /= 2;
         _spare_micros /= 2;
     }
@@ -185,9 +182,9 @@ update_spare_ticks:
 /*
   return number of micros until the current task reaches its deadline
  */
-uint16_t AP_Scheduler::time_available_usec(void)
+uint16_t AP_Scheduler::time_available_usec()
 {
-    uint32_t dt = AP_HAL::micros() - _task_time_started;
+    const uint32_t dt = AP_HAL::micros() - _task_time_started;
     if (dt > _task_time_allowed) {
         return 0;
     }

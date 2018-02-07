@@ -59,8 +59,8 @@ public:
     AP_Scheduler(scheduler_fastloop_fn_t fastloop_fn = nullptr);
 
     /* Do not allow copies */
-    AP_Scheduler(const AP_Scheduler &other) = delete;
-    AP_Scheduler &operator=(const AP_Scheduler&) = delete;
+    AP_Scheduler(AP_Scheduler &other) = delete;
+    AP_Scheduler &operator=(AP_Scheduler&) = delete;
 
     FUNCTOR_TYPEDEF(task_fn_t, void);
 
@@ -69,6 +69,7 @@ public:
         const char *name;
         float rate_hz;
         uint16_t max_time_micros;
+        uint16_t last_run;
     };
 
     // initialise scheduler
@@ -83,9 +84,6 @@ public:
 
     // write out PERF message to dataflash
     void Log_Write_Performance();
-
-    // call when one tick has passed
-    void tick(void);
 
     // return current tick counter
     uint16_t ticks() const { return _tick_counter; }
@@ -165,7 +163,7 @@ private:
     float _loop_period_s;
     
     // progmem list of tasks to run
-    const struct Task *_tasks;
+    Task *_tasks;
 
     // number of tasks in _tasks list
     uint8_t _num_tasks;
@@ -173,9 +171,6 @@ private:
     // number of 'ticks' that have passed (number of times that
     // tick() has been called
     uint16_t _tick_counter;
-
-    // tick counter at the time we last ran each task
-    uint16_t *_last_run;
 
     // number of microseconds allowed for the current task
     uint32_t _task_time_allowed;

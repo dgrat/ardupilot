@@ -24,7 +24,7 @@
   should be listed here, along with how often they should be called (in hz)
   and the maximum time they are expected to take (in microseconds)
  */
-const AP_Scheduler::Task Sub::scheduler_tasks[] = {
+AP_Scheduler::Task Sub::scheduler_tasks[] = {
     SCHED_TASK(fifty_hz_loop,         50,     75),
     SCHED_TASK(update_GPS,            50,    200),
 #if OPTFLOW == ENABLED
