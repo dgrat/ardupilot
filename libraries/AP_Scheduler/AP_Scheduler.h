@@ -12,68 +12,59 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-
-/*
- *  main loop scheduler for APM
- *  Author: Andrew Tridgell, January 2013
- *
- */
 #pragma once
+
+#define FILE __FILE
+#include <functional>
+#undef FILE
 
 #include <AP_Param/AP_Param.h>
 #include <AP_HAL/Util.h>
 #include <AP_Math/AP_Math.h>
 #include "PerfInfo.h"       // loop perf monitoring
-
-#define AP_SCHEDULER_NAME_INITIALIZER(_name) .name = #_name,
-
-/*
-  useful macro for creating scheduler task table
- */
-#define SCHED_TASK_CLASS(classname, classptr, func, _rate_hz, _max_time_micros) { \
-    .function = FUNCTOR_BIND(classptr, &classname::func, void),\
-    AP_SCHEDULER_NAME_INITIALIZER(func)\
-    .rate_hz = _rate_hz,\
-    .max_time_micros = _max_time_micros\
-}
-
-/*
-  A task scheduler for APM main loops
-
-  Sketches should call scheduler.init() on startup, then call
-  scheduler.tick() at regular intervals (typically every 10ms).
-
-  To run tasks use scheduler.run(), passing the amount of time that
-  the scheduler is allowed to use before it must return
- */
-
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Vehicle/AP_Vehicle.h>
 
-class AP_Scheduler
+
+struct AP_Task {   
+    const char*                     name;
+    std::function<void()>           function;
+    float                           rate_hz;
+    uint16_t                        max_time_micros;
+    uint32_t                        last_run_ticks;
+    AP_HAL::Util::perf_counter_t    perf_counter;   
+};
+
+// We define this as a constexpr, because of concerns regarding RAM usage in PX4
+template <class Obj>
+constexpr AP_Task make_task (
+    const char* name, 
+    Obj *obj,
+    void(Obj::*func)(), 
+    float rate_hz = 0, 
+    uint16_t max_time_micros = 0,
+    uint16_t last_run = 0
+)    
 {
+    const std::function<void()> wrapper = [obj, func]{ (*obj.*func)(); };
+    return { 
+        name, 
+        wrapper, 
+        rate_hz, 
+        max_time_micros, 
+        last_run
+    };
+}
+
+class AP_Scheduler {
+    
 public:
-
     FUNCTOR_TYPEDEF(scheduler_fastloop_fn_t, void);
-
+    
     AP_Scheduler(scheduler_fastloop_fn_t fastloop_fn = nullptr);
 
-    /* Do not allow copies */
-    AP_Scheduler(AP_Scheduler &other) = delete;
-    AP_Scheduler &operator=(AP_Scheduler&) = delete;
-
-    FUNCTOR_TYPEDEF(task_fn_t, void);
-
-    struct Task {
-        task_fn_t function;
-        const char *name;
-        float rate_hz;
-        uint16_t max_time_micros;
-        uint16_t last_run;
-    };
-
     // initialise scheduler
-    void init(const Task *tasks, uint8_t num_tasks, uint32_t log_performance_bit);
+    void init(AP_Task *tasks, uint8_t num_tasks, uint32_t log_performance_bit);
 
     // called by vehicle's main loop - which should be the only thing
     // that function does
@@ -144,6 +135,8 @@ public:
     AP::PerfInfo perf_info;
 
 private:
+    void update_spare_ticks();
+    
     // function that is called before anything in the scheduler table:
     scheduler_fastloop_fn_t _fastloop_fn;
 
@@ -163,13 +156,12 @@ private:
     float _loop_period_s;
     
     // progmem list of tasks to run
-    Task *_tasks;
+    AP_Task *_tasks;
 
     // number of tasks in _tasks list
     uint8_t _num_tasks;
 
-    // number of 'ticks' that have passed (number of times that
-    // tick() has been called
+    // number of 'ticks' that have passed (number of times that run() has been called
     uint16_t _tick_counter;
 
     // number of microseconds allowed for the current task
@@ -189,10 +181,8 @@ private:
 
     // time of last loop in seconds
     float _last_loop_time_s;
-    
-    // performance counters
-    AP_HAL::Util::perf_counter_t *_perf_counters;
 
     // bitmask bit which indicates if we should log PERF message to dataflash
     uint32_t _log_performance_bit;
 };
+

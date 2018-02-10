@@ -12,14 +12,7 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-
-/*
- *  main loop scheduler for APM
- *  Author: Andrew Tridgell, January 2013
- *
- */
-#include "AP_Scheduler.h"
-
+#include <AP_Scheduler/AP_Scheduler.h>
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Param/AP_Param.h>
 #include <AP_Vehicle/AP_Vehicle.h>
@@ -34,10 +27,10 @@
 #define SCHEDULER_DEFAULT_LOOP_RATE  50
 #endif
 
-#define debug(level, fmt, args...)   do { if ((level) <= _debug.get()) { hal.console->printf(fmt, ##args); }} while (0)
+#define debug_helper(level, fmt, args...)   do { if ((level) <= _debug.get()) { hal.console->printf(fmt, ##args); }} while (0)
+
 
 extern const AP_HAL::HAL& hal;
-
 int8_t AP_Scheduler::current_task = -1;
 
 const AP_Param::GroupInfo AP_Scheduler::var_info[] = {
@@ -76,24 +69,19 @@ AP_Scheduler::AP_Scheduler(scheduler_fastloop_fn_t fastloop_fn) :
 }
 
 // initialise the scheduler
-void AP_Scheduler::init(const AP_Scheduler::Task *tasks, uint8_t num_tasks)
+void AP_Scheduler::init(AP_Task *tasks, uint8_t num_tasks, uint32_t log_performance_bit)
 {
     _tasks = tasks;
     _num_tasks = num_tasks;
     _loop_period_us = 1000000UL / _loop_rate_hz;
-    _last_run_us = AP_HAL::micros();    
 
-    // setup initial performance counters
     perf_info.set_loop_rate(get_loop_rate_hz());
     perf_info.reset();
 
     _log_performance_bit = log_performance_bit;
     
-    if (_debug > 1 && _perf_counters == nullptr) {
-        _perf_counters = new AP_HAL::Util::perf_counter_t[_num_tasks];
-        for (uint8_t i=0; i < _num_tasks; i++) {
-            _perf_counters[i] = hal.util->perf_alloc(AP_HAL::Util::PC_ELAPSED, _tasks[i].name);
-        }
+    for (uint8_t i=0; i < _num_tasks; i++) {
+        _tasks[i].perf_counter = hal.util->perf_alloc(AP_HAL::Util::PC_ELAPSED, _tasks[i].name);
     }
 }
 
@@ -106,7 +94,7 @@ void AP_Scheduler::run(uint32_t time_available)
     _tick_counter++;
 
     for (uint8_t i = 0; i < _num_tasks; i++) {
-        const uint16_t dticks = _tick_counter - _tasks[i].last_run; // (x * _loop_period_us) would be the time which passed
+        const uint16_t dticks = _tick_counter - _tasks[i].last_run_ticks; // (x * _loop_period_us) would be the time which passed
         const uint16_t tmp = _loop_rate_hz / _tasks[i].rate_hz;   // how often the task can be called
         const uint16_t interval_ticks = tmp < 1 ? 1 : tmp;
         const uint16_t bias_slipped_ticks = interval_ticks;
@@ -119,7 +107,7 @@ void AP_Scheduler::run(uint32_t time_available)
 
         // we've slipped a whole run of this task!
         if (dticks >= bias_slipped_ticks) {
-            debug(2, "Scheduler slip task[%u-%s] (%u/%u/%u)\n",
+            debug_helper(2, "Scheduler slip task[%u-%s] (%u/%u/%u)\n",
                     (unsigned)i,
                     _tasks[i].name,
                     (unsigned)dticks,
@@ -131,26 +119,29 @@ void AP_Scheduler::run(uint32_t time_available)
         if (_task_time_allowed <= time_available) {
             _task_time_started = AP_HAL::micros();
             current_task = i;
-            const bool bPerfCntrs = _debug > 1 && _perf_counters && _perf_counters[i];
+            auto * const perf_cntr = _tasks[i].perf_counter;
+            const bool bPerfCntrs = _debug > 1 && perf_cntr;
             if (bPerfCntrs) {
-                hal.util->perf_begin(_perf_counters[i]);
+                hal.util->perf_begin(perf_cntr);
             }
+            
             _tasks[i].function();
+
             if (bPerfCntrs) {
-                hal.util->perf_end(_perf_counters[i]);
+                hal.util->perf_end(perf_cntr);
             }
             current_task = -1;
 
             // record the tick counter when we ran. This drives
             // when we next run the event
-            _tasks[i].last_run = _tick_counter;
+            _tasks[i].last_run_ticks = _tick_counter;
 
             // work out how long the event actually took
             const uint32_t time_taken = AP_HAL::micros() - _task_time_started;
 
             // the event overran!
             if (time_taken > _task_time_allowed) {
-                debug(3, "Scheduler overrun task[%u-%s] (%u/%u)\n",
+                debug_helper(3, "Scheduler overrun task[%u-%s] (%u/%u)\n",
                         (unsigned)i,
                         _tasks[i].name,
                         (unsigned)time_taken,
@@ -223,9 +214,6 @@ void AP_Scheduler::loop()
     if (_fastloop_fn) {
         _fastloop_fn();
     }
-
-    // tell the scheduler one tick has passed
-    tick();
 
     // run all the tasks that are due to run. Note that we only
     // have to call this once per loop, as the tasks are scheduled
