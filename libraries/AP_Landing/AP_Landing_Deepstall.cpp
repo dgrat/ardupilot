@@ -125,8 +125,8 @@ const AP_Param::GroupInfo AP_Landing_Deepstall::var_info[] = {
     AP_GROUPINFO("L1_TCON", 13, AP_Landing_Deepstall, time_constant, 0.4),
 
     // @Group: DS_
-    // @Path: ../PID/PID.cpp
-    AP_SUBGROUPINFO(ds_PID, "", 14, AP_Landing_Deepstall, PID),
+    // @Path: ../AC_PID/AC_PID.cpp
+    AP_SUBGROUPINFO(ds_PID, "", 14, AP_Landing_Deepstall, AC_PID),
 
     // @Param: ABORTALT
     // @DisplayName: Deepstall minimum abort altitude
@@ -587,6 +587,11 @@ bool AP_Landing_Deepstall::verify_breakout(const Location &current_loc, const Lo
 
 float AP_Landing_Deepstall::update_steering()
 {
+    static uint32_t last_time_ms = 0;
+    last_time_ms = last_time_ms == 0 ? AP_HAL::millis() : last_time_ms;
+    const float dt = static_cast<float>(AP_HAL::millis() - last_time_ms) / 1000.f;
+    last_time_ms = AP_HAL::millis();
+    
     Location current_loc;
     if ((!landing.ahrs.get_position(current_loc) || !landing.ahrs.healthy()) && !hold_level) {
         // panic if no position source is available
@@ -597,10 +602,9 @@ float AP_Landing_Deepstall::update_steering()
     }
 
     float desired_change = 0.0f;
-
+    
     if (!hold_level) {
         uint32_t time = AP_HAL::millis();
-        float dt = constrain_float(time - last_time, (uint32_t)10UL, (uint32_t)200UL) * 1e-3;
         last_time = time;
 
         Vector2f ab = location_diff(arc_exit, extended_approach);
@@ -630,6 +634,9 @@ float AP_Landing_Deepstall::update_steering()
                                     (double)degrees(yaw_rate),
                                     (double)location_diff(current_loc, landing_point).length());
 #endif // DEBUG_PRINTS
-
-    return ds_PID.get_pid(error);
+    
+    ds_PID.set_dt(dt);
+    ds_PID.set_input_filter_all(error);
+    
+    return ds_PID.get_pid();
 }
